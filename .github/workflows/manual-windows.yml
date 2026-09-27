@@ -1,0 +1,66 @@
+# 手动打 Windows 安装包：Actions → manual-windows → Run workflow。
+# 不创建 Release，成品在 run 的 Artifacts 里下载（90 天有效）。
+name: manual-windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      uiaccess:
+        description: 'uiAccess（候选窗覆盖系统界面，需要代码签名证书才生效，没证书必须关）'
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      QINGJIAN_UIACCESS: ${{ github.event.inputs.uiaccess == 'true' && '1' || '0' }}
+      PYTHON: python
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.96.0
+          targets: i686-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Fetch product data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tools/release/data-fetch.sh
+          ls -la data/generated data/generated/dicts data/model
+
+      - name: Install Inno Setup 7.1.0
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe'
+          $expected = '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f'
+          $exe = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          $actual = (Get-FileHash -Path $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Inno Setup SHA-256 mismatch: $actual" }
+          Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
+          & "${env:ProgramFiles}\Inno Setup 7\ISCC.exe" --version
+
+      - name: Build installer
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qingjian-windows-installer
+          path: target/installer/*.exe
